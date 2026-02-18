@@ -1,0 +1,41 @@
+name: Bug report
+description: Report something that is broken in PiSwitch
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please include enough detail to reproduce.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+      placeholder: Short description of the bug
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Press Hyper+R
+        2. Move cursor to slice 3
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS version, PiSwitch commit/version, Karabiner version
+    validations:
+      required: true

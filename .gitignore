@@ -10,3 +10,7 @@ config/instances/*.json
 
 # Local/private Finder group bundles
 assets/finder-groups/
+
+# Keep only the public README in version control
+*.md
+!/README.md

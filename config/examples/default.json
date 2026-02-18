@@ -1,0 +1,19 @@
+{
+  "apps": [
+    "Safari",
+    "Visual Studio Code",
+    "iTerm",
+    "Slack",
+    "Spotify"
+  ],
+  "colors": {
+    "Safari": "#2AA8FF",
+    "Visual Studio Code": "systemBlue",
+    "iTerm": "systemGreen",
+    "Slack": "#7C3AED",
+    "Spotify": "#1DB954"
+  },
+  "labels": {
+    "Visual Studio Code": "VS Code"
+  }
+}

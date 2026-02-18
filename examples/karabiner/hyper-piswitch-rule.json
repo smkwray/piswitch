@@ -1,0 +1,101 @@
+{
+  "title": "PiSwitch Hyper Key Bindings",
+  "rules": [
+    {
+      "description": "Map Caps Lock to Hyper (Command+Control+Option+Shift)",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "caps_lock",
+            "modifiers": {
+              "optional": ["any"]
+            }
+          },
+          "to": [
+            {
+              "key_code": "left_shift",
+              "modifiers": [
+                "left_command",
+                "left_control",
+                "left_option"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "Hyper+R opens PiSwitch default",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "r",
+            "modifiers": {
+              "mandatory": [
+                "left_command",
+                "left_control",
+                "left_option",
+                "left_shift"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "REPLACE_WITH_ABSOLUTE_PATH/piswitch/scripts/piswitch-launcher.sh"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "Hyper+H opens PiSwitch messaging",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "h",
+            "modifiers": {
+              "mandatory": [
+                "left_command",
+                "left_control",
+                "left_option",
+                "left_shift"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "REPLACE_WITH_ABSOLUTE_PATH/piswitch/scripts/piswitch-launcher.sh messaging"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "Hyper+G opens PiSwitch finder-groups",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "g",
+            "modifiers": {
+              "mandatory": [
+                "left_command",
+                "left_control",
+                "left_option",
+                "left_shift"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "REPLACE_WITH_ABSOLUTE_PATH/piswitch/scripts/piswitch-launcher.sh finder-groups"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

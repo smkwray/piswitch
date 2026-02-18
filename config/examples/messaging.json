@@ -1,0 +1,9 @@
+{
+  "apps": [
+    "Messages",
+    "Telegram",
+    "Discord",
+    "Slack",
+    "Mail"
+  ]
+}

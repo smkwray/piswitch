@@ -1,0 +1,12 @@
+.build/
+dist/
+run/
+.DS_Store
+*.swp
+
+# Local/private configs (use config/examples for public samples)
+config/instances/*.json
+!config/instances/.gitkeep
+
+# Local/private Finder group bundles
+assets/finder-groups/

@@ -1,21 +1,6 @@
 # PiSwitch
 
-PiSwitch is a macOS radial app switcher with per-instance menus (for example: default, messaging, finder-groups).
-
-## Status
-
-`pie-switcher` is now deprecated in favor of `piswitch`.
-
-## Project Layout
-
-- `Sources/PiSwitch/main.swift`: app + daemon + IPC logic
-- `scripts/build.sh`: release build
-- `scripts/piswitch-launcher.sh`: launcher used by Karabiner
-- `scripts/init-config.sh`: copies sample configs into local instances
-- `config/examples/*.json`: public-safe example configs
-- `config/instances/*.json`: your private local configs
-- `examples/karabiner/hyper-piswitch-rule.json`: Karabiner example rules
-- `run/`: runtime state
+PiSwitch is a macOS radial app switcher with per-instance menus (for example: `default`, `messaging`, `finder-groups`).
 
 ## Build
 
@@ -24,15 +9,15 @@ cd /path/to/piswitch
 ./scripts/build.sh
 ```
 
-## First-Time Setup
+## Setup
 
-1. Initialize local config files from examples:
+Initialize local instance configs from public examples:
 
 ```bash
 ./scripts/init-config.sh
 ```
 
-2. Edit your private configs in:
+Then edit:
 
 - `config/instances/default.json`
 - `config/instances/messaging.json`
@@ -40,7 +25,7 @@ cd /path/to/piswitch
 
 ## Config Format
 
-Minimum format:
+Minimum:
 
 ```json
 {
@@ -91,74 +76,35 @@ Finder groups:
 ./scripts/piswitch-launcher.sh finder-groups
 ```
 
-## Karabiner Example (Caps -> Hyper + PiSwitch)
+## Karabiner Example
 
-An example is included at:
+Example rules are in:
 
 - `examples/karabiner/hyper-piswitch-rule.json`
 
-What it contains:
+They include:
 
 - Caps Lock remapped to Hyper (`left_command + left_control + left_option + left_shift`)
 - `Hyper+R` -> PiSwitch default
 - `Hyper+H` -> PiSwitch messaging
 - `Hyper+G` -> PiSwitch finder-groups
 
-Important:
-
-- Replace `REPLACE_WITH_ABSOLUTE_PATH` in the example with your real path.
-- Back up `~/.config/karabiner/karabiner.json` before editing.
+Replace `REPLACE_WITH_ABSOLUTE_PATH` in that file with your local project path.
 
 ## Finder Groups
 
-For finder-groups instance values like `home`, `work`, `projects`, `archive`, PiSwitch resolves app bundles in:
+For `finder-groups`, app names like `home`, `work`, `projects`, `archive` resolve to:
 
 - `assets/finder-groups/<name>.app`
 - fallback: `../bin/finder-groups/<name>.app`
 
-## Public GitHub Safety
+## Repository Layout
 
-This repo is set up so personal files do not get committed:
-
-- `config/instances/*.json` is gitignored
-- `assets/finder-groups/` is gitignored (keep your local group apps private)
-- `run/`, `.build/`, `dist/` are gitignored
-
-Use only these as public examples:
-
-- `config/examples/*.json`
-- `examples/karabiner/hyper-piswitch-rule.json`
-
-If you ever accidentally stage private files, unstage them with:
-
-```bash
-git rm --cached -r assets/finder-groups config/instances
-```
-
-## First GitHub Publish (CLI)
-
-1. Create a new empty GitHub repo in browser (no README/license generated there).
-2. Run locally:
-
-```bash
-cd /path/to/piswitch
-git init
-git add .
-git commit -m "Initial PiSwitch release"
-git branch -M main
-git remote add origin https://github.com/<your-user>/<repo>.git
-git push -u origin main
-```
-
-3. Add a license (recommended: MIT) and push that commit.
-
-## Recommended Before Public Release
-
-1. Add `LICENSE`.
-2. Add screenshots or short GIF in README.
-3. Test on a clean macOS user profile.
-4. Remove or sanitize any absolute paths in examples.
-5. Tag a release (`v0.1.0`) after first stable publish.
+- `Sources/PiSwitch/main.swift`: app logic
+- `scripts/`: build, launcher, and setup scripts
+- `config/examples/`: public example configs
+- `config/instances/`: local instance configs
+- `examples/karabiner/`: Karabiner snippets
 
 ## License
 

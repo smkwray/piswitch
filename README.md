@@ -3,7 +3,7 @@
 `PiSwitch` (pronounced `/pɪs.wɪtʃ/`) is a macOS radial app switcher with per-instance menus (for example: `default`, `messaging`, `finder-groups`).
 
 <p align="center">
-  <img src="assets/logo/piswitch-logo.png" alt="PiSwitch logo" width="440" />
+  <img src="assets/logo/piswitch-logo.png" alt="PiSwitch logo" width="360" />
 </p>
 
 ## Screenshot

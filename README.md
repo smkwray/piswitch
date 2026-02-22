@@ -1,14 +1,16 @@
-# PiSwitch
-
-`PiSwitch` (pronounced `/pɪs.wɪtʃ/`) is a macOS radial app switcher with per-instance menus (for example: `default`, `messaging`, `finder-groups`).
-
 <p align="center">
-  <img src="assets/logo/piswitch-logo.png" alt="PiSwitch logo" width="360" />
+  <img src="assets/logo/piswitch-logo.png" alt="PiSwitch logo" width="420">
 </p>
 
-## Screenshot
+# PiSwitch
 
-![PiSwitch menu screenshot](assets/screenshots/piswitch-screenshot.png)
+A macOS radial app switcher with multiple instance menus (e.g. `default`, `messaging`, `finder-groups`). Trigger it with a hotkey, flick toward the app you want, release.
+
+Pronounced `/pɪs.wɪtʃ/` — pie + switch.
+
+<p align="center">
+  <img src="assets/screenshots/piswitch-screenshot.png" alt="PiSwitch screenshot" width="280">
+</p>
 
 ## Build
 
@@ -17,23 +19,25 @@ cd /path/to/piswitch
 ./scripts/build.sh
 ```
 
+Requires Xcode command-line tools (`xcode-select --install`).
+
 ## Setup
 
-Initialize local instance configs from public examples:
+Initialize local configs from the bundled examples:
 
 ```bash
 ./scripts/init-config.sh
 ```
 
-Then edit:
+Then customize the instance files:
 
-- `config/instances/default.json`
-- `config/instances/messaging.json`
-- `config/instances/finder-groups.json`
+- `config/instances/default.json` — your main app switcher
+- `config/instances/messaging.json` — chat/communication apps
+- `config/instances/finder-groups.json` — Finder group shortcuts
 
-## Config Format
+## Config format
 
-Minimum:
+Minimal config — just list the apps:
 
 ```json
 {
@@ -41,7 +45,7 @@ Minimum:
 }
 ```
 
-Optional per-instance overrides:
+With optional overrides for colors and labels:
 
 ```json
 {
@@ -58,61 +62,63 @@ Optional per-instance overrides:
 }
 ```
 
-Notes:
+**Colors** accept hex (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or macOS system colors (`systemBlue`, `systemGreen`, etc.). Keys match app names in the `apps` list.
 
-- `colors` keys match app names (or finder-group names) in `apps`
-- color values support hex (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) and named system colors (`systemBlue`, `systemGreen`, etc.)
-- `labels` overrides the text shown in each slice
+**Labels** override the text displayed in each pie slice.
 
-## Run
+Many popular apps (Safari, VS Code, iTerm, Claude, Slack, Discord, etc.) have built-in default colors and short labels, so you only need overrides for apps that aren't covered or when you want something custom.
 
-Default:
+## Usage
 
 ```bash
+# Default instance
 ./scripts/piswitch-launcher.sh
-```
 
-Messaging:
-
-```bash
+# Named instance
 ./scripts/piswitch-launcher.sh messaging
-```
-
-Finder groups:
-
-```bash
 ./scripts/piswitch-launcher.sh finder-groups
 ```
 
-## Karabiner Example
+## Hotkey setup with Karabiner-Elements
 
-Example rules are in:
+Example rules in `examples/karabiner/hyper-piswitch-rule.json`:
 
-- `examples/karabiner/hyper-piswitch-rule.json`
+| Hotkey | Action |
+|---|---|
+| Caps Lock | Remapped to Hyper (`Cmd+Ctrl+Opt+Shift`) |
+| Hyper + R | PiSwitch default |
+| Hyper + H | PiSwitch messaging |
+| Hyper + G | PiSwitch finder-groups |
 
-They include:
+To use: copy the rule into your Karabiner config and replace `REPLACE_WITH_ABSOLUTE_PATH` with your local project path.
 
-- Caps Lock remapped to Hyper (`left_command + left_control + left_option + left_shift`)
-- `Hyper+R` -> PiSwitch default
-- `Hyper+H` -> PiSwitch messaging
-- `Hyper+G` -> PiSwitch finder-groups
+## Finder groups
 
-Replace `REPLACE_WITH_ABSOLUTE_PATH` in that file with your local project path.
+For the `finder-groups` instance, app names like `home`, `work`, `projects` resolve to stub `.app` bundles at:
 
-## Finder Groups
+1. `assets/finder-groups/<name>.app`
+2. Fallback: `../bin/finder-groups/<name>.app`
 
-For `finder-groups`, app names like `home`, `work`, `projects`, `archive` resolve to:
+These open specific Finder locations rather than real applications.
 
-- `assets/finder-groups/<name>.app`
-- fallback: `../bin/finder-groups/<name>.app`
+## Project layout
 
-## Repository Layout
-
-- `Sources/PiSwitch/main.swift`: app logic
-- `scripts/`: build, launcher, and setup scripts
-- `config/examples/`: public example configs
-- `config/instances/`: local instance configs
-- `examples/karabiner/`: Karabiner snippets
+```
+Sources/PiSwitch/main.swift    App logic (single-file Swift)
+scripts/
+  build.sh                     Build the .app bundle
+  piswitch-launcher.sh         Launch with optional instance name
+  init-config.sh               Copy example configs to instances/
+  smoke-test.sh                Basic sanity check
+config/
+  examples/                    Public example configs
+  instances/                   Local configs (gitignored)
+examples/karabiner/            Karabiner-Elements snippets
+assets/
+  logo/                        Project logo
+  screenshots/                 Screenshots
+  finder-groups/               Stub .app bundles for Finder groups
+```
 
 ## License
 

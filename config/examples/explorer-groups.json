@@ -1,0 +1,15 @@
+{
+  "apps": ["home", "work", "projects", "downloads"],
+  "colors": {
+    "home": "systemBlue",
+    "work": "systemOrange",
+    "projects": "systemGreen",
+    "downloads": "systemPurple"
+  },
+  "labels": {
+    "home": "Home",
+    "work": "Work",
+    "projects": "Projects",
+    "downloads": "Downloads"
+  }
+}

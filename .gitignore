@@ -4,6 +4,13 @@ run/
 .DS_Store
 *.swp
 
+# Windows build artifacts
+windows/PiSwitch/bin/
+windows/PiSwitch/obj/
+
+# Stale scripts directory (superseded by scripts/*-windows.ps1)
+scripts-windows/
+
 # Local/private configs (use config/examples for public samples)
 config/instances/*.json
 !config/instances/.gitkeep

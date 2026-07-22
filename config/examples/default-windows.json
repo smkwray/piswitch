@@ -1,0 +1,16 @@
+{
+  "apps": ["Chrome", "Visual Studio Code", "Windows Terminal", "Slack", "Spotify"],
+  "colors": {
+    "Chrome": "#FFCC00",
+    "Visual Studio Code": "systemBlue",
+    "Windows Terminal": "#2D2D2D",
+    "Slack": "#7C3AED",
+    "Spotify": "#1DB954"
+  },
+  "labels": {
+    "Visual Studio Code": "VS Code",
+    "Windows Terminal": "Terminal"
+  },
+  "paths": {
+  }
+}

@@ -215,6 +215,7 @@ public static class AppLauncher
             "telegram" => "Telegram",
             "synctrayzor" => "SyncTrayzor",
             "antigravity" => "Antigravity",
+            "codex" or "chatgpt" => "ChatGPT",
             "vivaldi" => "vivaldi",
             "brave" => "brave",
             "visual studio" or "vs" => "devenv",

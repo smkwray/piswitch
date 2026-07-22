@@ -6,7 +6,7 @@
 
 (/pɪs.wɪtʃ/)
 
-A macOS radial app switcher with multiple instance menus (e.g. `default`, `messaging`, `finder-groups`). Trigger it with a hotkey, flick toward the app you want, release.
+A macOS radial app switcher with multiple instance menus (e.g. `default`, `messaging`, `finder-groups`). Trigger it with a hotkey, flick toward the app you want and release — or press the number on the slice to switch instantly.
 
 <p align="center">
   <img src="assets/screenshots/piswitch-screenshot.png" alt="PiSwitch screenshot" width="280">

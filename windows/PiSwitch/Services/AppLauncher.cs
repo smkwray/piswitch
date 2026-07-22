@@ -31,8 +31,51 @@ public static class AppLauncher
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
     private const int SW_RESTORE = 9;
     private const int SW_SHOW = 5;
+
+    /// <summary>
+    /// Reliably brings <paramref name="hwnd"/> to the foreground. A background process'
+    /// bare SetForegroundWindow is demoted by Windows' foreground lock, so we temporarily
+    /// attach to the current foreground thread's input queue to borrow its foreground rights.
+    /// </summary>
+    private static void ForceForeground(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+
+        var foreground = GetForegroundWindow();
+        var targetThread = GetWindowThreadProcessId(foreground, out _);
+        var thisThread = GetCurrentThreadId();
+
+        var attached = false;
+        try
+        {
+            if (foreground != IntPtr.Zero && targetThread != thisThread)
+                attached = AttachThreadInput(thisThread, targetThread, true);
+
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        }
+        finally
+        {
+            if (attached)
+                AttachThreadInput(thisThread, targetThread, false);
+        }
+    }
 
     public static void Launch(string appName, string appHome, string? configPath = null)
     {
@@ -77,7 +120,7 @@ public static class AppLauncher
                     continue;
                 }
 
-                SetForegroundWindow(hwnd);
+                ForceForeground(hwnd);
                 return true;
             }
 
@@ -91,7 +134,7 @@ public static class AppLauncher
                     ShowWindow(hwnd, SW_SHOW);
                     if (IsIconic(hwnd))
                         ShowWindow(hwnd, SW_RESTORE);
-                    SetForegroundWindow(hwnd);
+                    ForceForeground(hwnd);
                     return true;
                 }
             }

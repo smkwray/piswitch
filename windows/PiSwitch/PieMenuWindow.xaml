@@ -6,12 +6,9 @@
         Background="Transparent"
         Topmost="True"
         ShowInTaskbar="False"
-        ShowActivated="True"
+        ShowActivated="False"
         Width="400" Height="400"
         ResizeMode="NoResize"
-        WindowStartupLocation="Manual"
-        PreviewKeyDown="Window_KeyDown"
-        KeyDown="Window_KeyDown"
-        Deactivated="Window_Deactivated">
+        WindowStartupLocation="Manual">
     <Grid x:Name="RootGrid" />
 </Window>

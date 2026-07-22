@@ -1,6 +1,8 @@
 using System.IO;
 using System.Threading;
 using System.Windows;
+using System.Windows.Threading;
+using PiSwitch.Interop;
 using PiSwitch.Models;
 using PiSwitch.Services;
 
@@ -13,6 +15,11 @@ public partial class App : Application
     private InstanceManager _instanceManager = null!;
     private TriggerWatcher? _triggerWatcher;
     private HotkeyService? _hotkeyService;
+    private InputHookService? _inputHook;
+    private FileSystemWatcher? _configWatcher;
+    private DispatcherTimer? _autoHideTimer;
+    private DispatcherTimer? _trimTimer;
+    private uint _hideOthersMsg;
     private TrayIcon? _trayIcon;
     private EventWaitHandle? _showEvent;
     private Thread? _eventThread;
@@ -87,12 +94,25 @@ public partial class App : Application
             Logger.Bootstrap("main:load-config");
             RefreshConfigIfNeeded();
 
+            Logger.Bootstrap("main:setup-input-hook");
+            SetupInputHook();
+
+            Logger.Bootstrap("main:setup-config-watch");
+            SetupConfigWatch();
+
             Logger.Bootstrap("main:setup-tray");
             SetupTrayIcon();
 
             Logger.Bootstrap("main:setup-trigger");
             SetupTriggerWatch();
             SetupEventTrigger();
+
+            // Warm-render: briefly show the layered window off-screen so the first real
+            // show is already composited (avoids the WPF first-frame hitch).
+            WarmRender();
+
+            // Trim the startup working-set spike once the app goes idle.
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(TrimWorkingSet));
 
             Logger.Bootstrap("main:ready");
         }
@@ -212,11 +232,83 @@ public partial class App : Application
         return Directory.GetCurrentDirectory();
     }
 
+    private void SetupInputHook()
+    {
+        _autoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+        _autoHideTimer.Tick += (_, _) => HideMenu();
+
+        // Trim the working set a few seconds after the menu is dismissed (keeps idle resident
+        // memory low without penalizing rapid re-opens).
+        _trimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _trimTimer.Tick += (_, _) => { _trimTimer!.Stop(); TrimWorkingSet(); };
+
+        // Cross-instance coordination: a system-wide message so only one pie is visible at a time.
+        _hideOthersMsg = NativeMethods.RegisterWindowMessage("PiSwitch_HideOthers");
+        _menuWindow.HideOthersMessageId = _hideOthersMsg;
+
+        // Global keyboard/mouse hooks; selection is captured independent of window focus.
+        _inputHook = new InputHookService();
+        _inputHook.Start(_menuWindow.Hwnd);
+    }
+
+    private static void TrimWorkingSet()
+    {
+        try { NativeMethods.EmptyWorkingSet(NativeMethods.GetCurrentProcess()); } catch { }
+    }
+
+    private void SetupConfigWatch()
+    {
+        var dir = _config.ConfigDir;
+        try { Directory.CreateDirectory(dir); } catch { }
+        try
+        {
+            _configWatcher = new FileSystemWatcher(dir, "*.json")
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                EnableRaisingEvents = true,
+                IncludeSubdirectories = false
+            };
+            void OnChange(object? _, FileSystemEventArgs __) =>
+                Dispatcher.BeginInvoke(new Action(ReloadConfig));
+            _configWatcher.Changed += OnChange;
+            _configWatcher.Created += OnChange;
+            _configWatcher.Renamed += (_, _) => Dispatcher.BeginInvoke(new Action(ReloadConfig));
+        }
+        catch
+        {
+            // Watching a cloud/synced dir can be unreliable; the tray "Reload Config" stays
+            // the guaranteed fallback. Config is loaded once at startup regardless.
+        }
+    }
+
+    /// <summary>Force a config reload off the hot path (watcher / tray Reload).</summary>
+    private void ReloadConfig()
+    {
+        _cachedAppConfigs = null;
+        RefreshConfigIfNeeded();
+    }
+
+    private void WarmRender()
+    {
+        try
+        {
+            // Show the layered window off-screen and let it compose one frame, then hide it
+            // (after the render pass, via Background-priority dispatch) so the first real show
+            // doesn't pay the WPF first-frame cost.
+            _menuWindow.Left = -10000;
+            _menuWindow.Top = -10000;
+            _menuWindow.Visibility = Visibility.Visible;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                new Action(() => _menuWindow.Visibility = Visibility.Hidden));
+        }
+        catch { }
+    }
+
     private void SetupTrayIcon()
     {
         _trayIcon = new TrayIcon();
         _trayIcon.ShowMenuRequested += ShowMenu;
-        _trayIcon.ReloadRequested += () => { _cachedAppConfigs = null; ShowMenu(); };
+        _trayIcon.ReloadRequested += () => { ReloadConfig(); ShowMenu(); };
         _trayIcon.ExitRequested += ExitApplication;
         _trayIcon.Initialize(_menuWindow, $"PiSwitch ({_instanceName})");
     }
@@ -287,7 +379,8 @@ public partial class App : Application
 
     public void ShowMenu()
     {
-        RefreshConfigIfNeeded();
+        // No filesystem work on the show path: config is cached at startup and refreshed
+        // out-of-band (config watcher / tray Reload), so opening the menu never touches G:.
         Logger.Event($"show-menu apps={_cachedAppConfigs?.Count ?? 0}");
 
         try
@@ -305,15 +398,32 @@ public partial class App : Application
             _menuWindow.Show();
             if (_cachedAppConfigs != null)
                 _menuWindow.Rebuild(_cachedAppConfigs);
+            _inputHook?.Retarget(_menuWindow.Hwnd);
             _menuWindow.ShowAtCursor();
         }
+
+        // Tell any other instance to hide its pie — only one menu visible at a time.
+        if (_hideOthersMsg != 0)
+            NativeMethods.PostMessage(NativeMethods.HWND_BROADCAST, _hideOthersMsg,
+                (IntPtr)Environment.ProcessId, IntPtr.Zero);
+
+        // Arm global key capture only while the menu is visible, with a safety auto-hide so
+        // an abandoned menu can't keep swallowing digits.
+        _trimTimer?.Stop();
+        _inputHook?.Arm();
+        _autoHideTimer?.Stop();
+        _autoHideTimer?.Start();
 
         Logger.Event("menu-visible");
     }
 
     private void HideMenu()
     {
+        _inputHook?.Disarm();
+        _autoHideTimer?.Stop();
         _menuWindow.HideMenu();
+        _trimTimer?.Stop();
+        _trimTimer?.Start();
         Logger.Event("menu-hidden");
     }
 
@@ -324,14 +434,10 @@ public partial class App : Application
         var configPath = _config.PathForApp(appName);
         Logger.Event($"launch-app name={appName} path={configPath ?? "(auto)"}");
 
-        // Order matters: activate the target while PiSwitch still holds the foreground
-        // input lock (the click that just landed inside our window). If we Hide() first,
-        // we release foreground and Windows' focus-stealing-prevention can silently
-        // demote SetForegroundWindow(targetHwnd) to a taskbar-flash, which is what
-        // caused intermittent "had to click 2-3 times" reports.
-        _menuWindow.PrepareForLaunch();
-        AppLauncher.Launch(appName, _config.AppHome, configPath);
+        // The overlay never held the foreground (WS_EX_NOACTIVATE), so hide it first, then
+        // activate the target. AppLauncher uses AttachThreadInput to win the foreground race.
         HideMenu();
+        AppLauncher.Launch(appName, _config.AppHome, configPath);
     }
 
     private void ExitApplication()
@@ -346,10 +452,13 @@ public partial class App : Application
 
         _triggerWatcher?.Dispose();
         _hotkeyService?.Dispose();
+        _inputHook?.Dispose();
+        _configWatcher?.Dispose();
         _trayIcon?.Dispose();
         _instanceManager.Cleanup();
         _instanceManager.Dispose();
 
+        Logger.Shutdown();
         _menuWindow.ForceClose();
         Shutdown();
     }
@@ -367,6 +476,9 @@ public partial class App : Application
             _trayIcon?.Dispose();
             _triggerWatcher?.Dispose();
             _hotkeyService?.Dispose();
+            _inputHook?.Dispose();
+            _configWatcher?.Dispose();
+            Logger.Shutdown();
         }
 
         base.OnExit(e);

@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Interop;
-using System.Windows.Threading;
 using PiSwitch.Interop;
 using PiSwitch.Models;
 
@@ -10,41 +8,23 @@ namespace PiSwitch;
 
 public partial class PieMenuWindow : Window
 {
-    private const int FocusGuardDurationMs = 900;
-    private const int FocusGuardTickMs = 45;
-
     private List<AppConfig> _apps = [];
     private PieMenuView? _pieView;
-    private bool _suppressDeactivate;
     private bool _allowClose;
-    private readonly DispatcherTimer _suppressTimer;
-    private readonly DispatcherTimer _focusGuardTimer;
-    private DateTime _focusGuardUntilUtc = DateTime.MinValue;
+    private HwndSource? _source;
 
     public event Action<int>? OnSelect;
     public event Action? OnCancel;
 
+    /// <summary>The window's native handle (the keyboard/mouse hook posts selections here).</summary>
+    public IntPtr Hwnd { get; private set; }
+
+    /// <summary>RegisterWindowMessage id broadcast between instances to enforce one pie at a time.</summary>
+    public uint HideOthersMessageId { get; set; }
+
     public PieMenuWindow()
     {
         InitializeComponent();
-        _suppressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-        _suppressTimer.Tick += (_, _) =>
-        {
-            _suppressTimer.Stop();
-            _suppressDeactivate = false;
-        };
-
-        _focusGuardTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(FocusGuardTickMs) };
-        _focusGuardTimer.Tick += (_, _) =>
-        {
-            if (!IsFocusGuardActive)
-            {
-                _focusGuardTimer.Stop();
-                return;
-            }
-
-            EnsureForeground();
-        };
     }
 
     public void Rebuild(List<AppConfig> apps)
@@ -57,24 +37,71 @@ public partial class PieMenuWindow : Window
         RootGrid.Children.Add(_pieView);
     }
 
-    public void ShowAtCursor()
+    protected override void OnSourceInitialized(EventArgs e)
     {
-        _suppressDeactivate = true;
-        _suppressTimer.Stop();
+        base.OnSourceInitialized(e);
+        Hwnd = new WindowInteropHelper(this).Handle;
 
-        if (!NativeMethods.GetCursorPos(out var cursorPos))
+        // Turn the overlay into a no-activate, tool-window, topmost layer. Showing it then
+        // never steals foreground or keyboard focus from the app the user is in, so the
+        // immediate number keypress (captured globally by InputHookService) is never lost,
+        // and there is no taskbar flash / deactivate churn / focus-guard war to manage.
+        var ex = NativeMethods.GetWindowLongPtr(Hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
+        ex |= NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_TOPMOST;
+        NativeMethods.SetWindowLongPtr(Hwnd, NativeMethods.GWL_EXSTYLE, (IntPtr)ex);
+
+        _source = HwndSource.FromHwnd(Hwnd);
+        _source?.AddHook(WndProc);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // Another instance is showing its pie — hide ours (ignore our own broadcast).
+        if (HideOthersMessageId != 0 && (uint)msg == HideOthersMessageId)
         {
-            _suppressDeactivate = false;
-            return;
+            if (wParam.ToInt32() != Environment.ProcessId)
+            {
+                handled = true;
+                OnCancel?.Invoke();
+            }
+            return IntPtr.Zero;
         }
 
-        // Get work area of the monitor containing the cursor
+        switch ((uint)msg)
+        {
+            case NativeMethods.WM_MOUSEACTIVATE:
+                // A click on the pie must not activate it (keeps it a true overlay).
+                handled = true;
+                return (IntPtr)NativeMethods.MA_NOACTIVATE;
+
+            case NativeMethods.WM_PISWITCH_SELECT:
+                handled = true;
+                OnSelect?.Invoke(wParam.ToInt32());
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_PISWITCH_CANCEL:
+                handled = true;
+                OnCancel?.Invoke();
+                return IntPtr.Zero;
+        }
+
+        return IntPtr.Zero;
+    }
+
+    public void ShowAtCursor()
+    {
+        if (!NativeMethods.GetCursorPos(out var cursorPos))
+            return;
+
+        // Work area of the monitor under the cursor.
         var hMonitor = NativeMethods.MonitorFromPoint(cursorPos, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var monitorInfo = new NativeMethods.MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        var monitorInfo = new NativeMethods.MONITORINFO
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>()
+        };
         NativeMethods.GetMonitorInfo(hMonitor, ref monitorInfo);
         var workArea = monitorInfo.rcWork;
 
-        // Convert to WPF device-independent pixels
         var source = PresentationSource.FromVisual(this);
         var dpiX = source?.CompositionTarget?.TransformFromDevice.M11 ?? 1.0;
         var dpiY = source?.CompositionTarget?.TransformFromDevice.M22 ?? 1.0;
@@ -98,82 +125,24 @@ public partial class PieMenuWindow : Window
         Top = winY;
 
         _pieView?.Highlight(null);
-
         Visibility = Visibility.Visible;
-        EnsureForeground();
-        _focusGuardUntilUtc = DateTime.UtcNow.AddMilliseconds(FocusGuardDurationMs);
-        _focusGuardTimer.Stop();
-        _focusGuardTimer.Start();
 
-        var hwnd = new WindowInteropHelper(this).Handle;
+        // Bring topmost + ensure shown, WITHOUT activating (no focus steal).
+        if (Hwnd != IntPtr.Zero)
+        {
+            NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_TOPMOST,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
+                NativeMethods.SWP_SHOWWINDOW | NativeMethods.SWP_NOACTIVATE);
+        }
 
-        Services.Logger.Event($"window-pos left={Left:F0} top={Top:F0} w={Width:F0} h={Height:F0} hwnd={hwnd}");
-
-        // Use a timer to clear the suppress flag — Deactivated fires asynchronously
-        // after this method returns, so we can't clear it synchronously here.
-        _suppressTimer.Start();
+        Services.Logger.Event($"window-pos left={Left:F0} top={Top:F0} hwnd={Hwnd}");
     }
 
     public void HideMenu()
     {
-        _suppressDeactivate = true;
-        _suppressTimer.Stop();
-        _focusGuardTimer.Stop();
-        _focusGuardUntilUtc = DateTime.MinValue;
         Visibility = Visibility.Hidden;
     }
-
-    /// <summary>
-    /// Called by the app immediately before activating a target app, while the pie
-    /// menu is still visible. Stops the focus-guard so it can't race the launcher's
-    /// SetForegroundWindow call, and arms the deactivate suppressor so the
-    /// inevitable focus loss to the target window doesn't fire OnCancel.
-    /// The window stays visible — App.LaunchApp() calls HideMenu() afterwards.
-    /// </summary>
-    public void PrepareForLaunch()
-    {
-        _focusGuardTimer.Stop();
-        _focusGuardUntilUtc = DateTime.MinValue;
-        _suppressDeactivate = true;
-        _suppressTimer.Stop();
-        _suppressTimer.Start();
-    }
-
-    private void Window_KeyDown(object sender, KeyEventArgs e)
-    {
-        var appCount = _apps.Count;
-
-        switch (e.Key)
-        {
-            case Key.Escape:
-                OnCancel?.Invoke();
-                e.Handled = true;
-                return;
-            case Key.D1 or Key.NumPad1: if (appCount > 0) { OnSelect?.Invoke(0); e.Handled = true; } return;
-            case Key.D2 or Key.NumPad2: if (appCount > 1) { OnSelect?.Invoke(1); e.Handled = true; } return;
-            case Key.D3 or Key.NumPad3: if (appCount > 2) { OnSelect?.Invoke(2); e.Handled = true; } return;
-            case Key.D4 or Key.NumPad4: if (appCount > 3) { OnSelect?.Invoke(3); e.Handled = true; } return;
-            case Key.D5 or Key.NumPad5: if (appCount > 4) { OnSelect?.Invoke(4); e.Handled = true; } return;
-            case Key.D6 or Key.NumPad6: if (appCount > 5) { OnSelect?.Invoke(5); e.Handled = true; } return;
-            case Key.D7 or Key.NumPad7: if (appCount > 6) { OnSelect?.Invoke(6); e.Handled = true; } return;
-            case Key.D8 or Key.NumPad8: if (appCount > 7) { OnSelect?.Invoke(7); e.Handled = true; } return;
-        }
-    }
-
-    private void Window_Deactivated(object? sender, EventArgs e)
-    {
-        if (IsFocusGuardActive)
-        {
-            Dispatcher.BeginInvoke(EnsureForeground, DispatcherPriority.Input);
-            return;
-        }
-
-        if (!_suppressDeactivate && Visibility == Visibility.Visible)
-            OnCancel?.Invoke();
-    }
-
-    private bool IsFocusGuardActive =>
-        Visibility == Visibility.Visible && DateTime.UtcNow < _focusGuardUntilUtc;
 
     /// <summary>
     /// Prevents the window from being closed by the system (e.g. during hibernate).
@@ -194,22 +163,11 @@ public partial class PieMenuWindow : Window
     public void ForceClose()
     {
         _allowClose = true;
-        Close();
-    }
-
-    private void EnsureForeground()
-    {
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd != IntPtr.Zero)
+        if (_source != null)
         {
-            NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOPMOST,
-                0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_SHOWWINDOW);
-            NativeMethods.SetForegroundWindow(hwnd);
+            _source.RemoveHook(WndProc);
+            _source = null;
         }
-
-        Activate();
-        Focus();
-        Keyboard.Focus(this);
+        Close();
     }
 }

@@ -25,6 +25,23 @@ public static class AppLauncher
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(
+        IntPtr hWnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")]
@@ -46,7 +63,22 @@ public static class AppLauncher
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
     private const int SW_RESTORE = 9;
-    private const int SW_SHOW = 5;
+    private const int GWL_EXSTYLE = -20;
+    private const long WS_EX_TOPMOST = 0x00000008L;
+    private const long WS_EX_TOOLWINDOW = 0x00000080L;
+    private const long WS_EX_APPWINDOW = 0x00040000L;
+    private const long WS_EX_NOACTIVATE = 0x08000000L;
+    private const uint GW_OWNER = 4;
+    private const int DWMWA_CLOAKED = 14;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     /// <summary>
     /// Reliably brings <paramref name="hwnd"/> to the foreground. A background process'
@@ -102,44 +134,21 @@ public static class AppLauncher
             var procs = Process.GetProcessesByName(processName);
             if (procs.Length == 0) return false;
 
-            // First pass: find a process with a visible main window
-            foreach (var proc in procs)
+            // Process.MainWindowHandle is not reliable for multi-window apps. Electron can
+            // report a voice bubble or other overlay as the main window, so enumerate every
+            // top-level window for every matching process and select the best app window.
+            var processIds = procs.Select(proc => (uint)proc.Id).ToHashSet();
+            var hwnd = FindBestWindowByProcessIds(processIds);
+            if (hwnd != IntPtr.Zero)
             {
-                var hwnd = proc.MainWindowHandle;
-                if (hwnd == IntPtr.Zero) continue;
-
                 if (IsIconic(hwnd))
-                {
                     ShowWindow(hwnd, SW_RESTORE);
-                }
-                else if (!IsWindowVisible(hwnd))
-                {
-                    // Window is hidden (e.g. tray-minimized WPF app calling Window.Hide()).
-                    // Skip — fall through to the re-launch path so the app's single-instance
-                    // handler can restore its UI.
-                    continue;
-                }
 
                 ForceForeground(hwnd);
                 return true;
             }
 
-            // Second pass: tray-only apps (MainWindowHandle == Zero).
-            // Use EnumWindows to find any window owned by the process.
-            foreach (var proc in procs)
-            {
-                var hwnd = FindWindowByProcessId((uint)proc.Id);
-                if (hwnd != IntPtr.Zero)
-                {
-                    ShowWindow(hwnd, SW_SHOW);
-                    if (IsIconic(hwnd))
-                        ShowWindow(hwnd, SW_RESTORE);
-                    ForceForeground(hwnd);
-                    return true;
-                }
-            }
-
-            // Third pass: for tray apps that truly have no discoverable window,
+            // For tray apps that truly have no discoverable app window,
             // re-launching the exe typically causes the existing instance to show
             // its main window. Return false so the caller falls through to launch.
         }
@@ -152,29 +161,51 @@ public static class AppLauncher
     }
 
     /// <summary>
-    /// Enumerates all top-level windows to find a VISIBLE one belonging to the given process ID.
-    /// Returns IntPtr.Zero if the process has no visible top-level window. For tray apps
-    /// minimized to the system tray (e.g. SyncTrayzor calling Window.Hide()), the caller
-    /// should fall through to re-launching the exe — the app's single-instance handler
-    /// will then restore the main window. Picking a hidden support window here causes the
-    /// wrong window (tooltip/popup/balloon) to be shown via SW_SHOW.
+    /// Finds the best visible top-level app window across the matching process IDs.
+    /// Tool/no-activate overlays and DWM-cloaked windows are not app surfaces. Among
+    /// the remaining candidates, prefer taskbar windows, ownerless windows, titled
+    /// windows, and finally the largest surface.
     /// </summary>
-    private static IntPtr FindWindowByProcessId(uint targetPid)
+    private static IntPtr FindBestWindowByProcessIds(HashSet<uint> targetPids)
     {
         IntPtr bestHwnd = IntPtr.Zero;
+        long bestScore = long.MinValue;
 
         EnumWindows((hwnd, _) =>
         {
             GetWindowThreadProcessId(hwnd, out var pid);
-            if (pid != targetPid) return true; // continue
+            if (!targetPids.Contains(pid) || !IsWindowVisible(hwnd))
+                return true;
 
-            if (IsWindowVisible(hwnd))
+            var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+            if ((exStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0)
+                return true;
+
+            if (DwmGetWindowAttribute(
+                    hwnd, DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0
+                && cloaked != 0)
+                return true;
+
+            long score = 0;
+            if ((exStyle & WS_EX_APPWINDOW) != 0) score += 4_000_000_000L;
+            if (GetWindow(hwnd, GW_OWNER) == IntPtr.Zero) score += 2_000_000_000L;
+            if (GetWindowTextLength(hwnd) > 0) score += 1_000_000_000L;
+            if ((exStyle & WS_EX_TOPMOST) == 0) score += 500_000_000L;
+
+            if (GetWindowRect(hwnd, out var rect))
             {
-                bestHwnd = hwnd;
-                return false; // stop — found a visible window
+                var width = Math.Max(0L, (long)rect.Right - rect.Left);
+                var height = Math.Max(0L, (long)rect.Bottom - rect.Top);
+                score += Math.Min(width * height, 499_999_999L);
             }
 
-            return true; // keep looking for visible
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestHwnd = hwnd;
+            }
+
+            return true;
         }, IntPtr.Zero);
 
         return bestHwnd;

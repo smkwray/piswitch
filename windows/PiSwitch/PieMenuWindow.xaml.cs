@@ -141,6 +141,17 @@ public partial class PieMenuWindow : Window
 
     public void HideMenu()
     {
+        // WPF defers the real ShowWindow(SW_HIDE) behind a Normal-priority dispatcher op, so a
+        // busy UI thread leaves the overlay painted on screen. Drop the HWND directly — the
+        // mirror of the SWP_SHOWWINDOW in ShowAtCursor — so dismissal never waits on the pump.
+        if (Hwnd != IntPtr.Zero)
+        {
+            NativeMethods.SetWindowPos(Hwnd, IntPtr.Zero,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER |
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_HIDEWINDOW);
+        }
+
         Visibility = Visibility.Hidden;
     }
 

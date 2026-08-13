@@ -437,7 +437,12 @@ public partial class App : Application
         // The overlay never held the foreground (WS_EX_NOACTIVATE), so hide it first, then
         // activate the target. AppLauncher uses AttachThreadInput to win the foreground race.
         HideMenu();
-        AppLauncher.Launch(appName, _config.AppHome, configPath);
+
+        // Launch off the UI thread: process enumeration, EnumWindows and especially
+        // ShellExecuteEx on a shell:AppsFolder path each block for hundreds of ms, which would
+        // otherwise stall the dispatcher — freezing the auto-hide timer and any following show.
+        var appHome = _config.AppHome;
+        Task.Run(() => AppLauncher.Launch(appName, appHome, configPath));
     }
 
     private void ExitApplication()

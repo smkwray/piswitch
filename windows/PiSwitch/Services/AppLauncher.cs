@@ -42,6 +42,30 @@ public static class AppLauncher
     private static extern int DwmGetWindowAttribute(
         IntPtr hWnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    [DllImport("ole32.dll")]
+    private static extern int CoAllowSetForegroundWindow(
+        [MarshalAs(UnmanagedType.IUnknown)] object pUnk, IntPtr lpvReserved);
+
+    /// <summary>Activation manager, used to start packaged (MSIX) apps by AUMID.</summary>
+    [ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IApplicationActivationManager
+    {
+        // Only the first vtable slot is declared; the rest are never called.
+        [PreserveSig]
+        int ActivateApplication(
+            [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+            [MarshalAs(UnmanagedType.LPWStr)] string? arguments,
+            uint options,
+            out uint processId);
+    }
+
+    private static readonly Guid ApplicationActivationManagerClsid =
+        new("45BA127D-10A8-46EA-8AB7-56EA9078943C");
+
+    private const uint AO_NOERRORUI = 0x00000002;
+    private const string AppsFolderPrefix = "shell:AppsFolder\\";
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")]
@@ -318,11 +342,56 @@ public static class AppLauncher
 
     private static void StartProcess(string target)
     {
+        if (target.StartsWith(AppsFolderPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            ActivatePackagedApp(target[AppsFolderPrefix.Length..]);
+            return;
+        }
+
         Process.Start(new ProcessStartInfo
         {
             FileName = target,
             UseShellExecute = true
         });
+    }
+
+    /// <summary>
+    /// Starts or re-activates a packaged (MSIX) app by AUMID. ShellExecuteEx on a
+    /// shell:AppsFolder path switches on shell startup feedback — the busy cursor — and for a
+    /// packaged activation that feedback outlives the window appearing, because the activated
+    /// app never goes input-idle the way a freshly created process does. The activation manager
+    /// does the same job with no feedback.
+    /// </summary>
+    private static void ActivatePackagedApp(string aumid)
+    {
+        var type = Type.GetTypeFromCLSID(ApplicationActivationManagerClsid)
+            ?? throw new InvalidOperationException("activation manager unavailable");
+        var manager = (IApplicationActivationManager)Activator.CreateInstance(type)!;
+
+        // The activation service is out-of-process, so it needs our foreground rights handed to
+        // it explicitly — and we only hold those by borrowing from the current foreground
+        // thread, same trick as ForceForeground. Without this the app comes up behind.
+        var foreground = GetForegroundWindow();
+        var targetThread = GetWindowThreadProcessId(foreground, out _);
+        var thisThread = GetCurrentThreadId();
+        var attached = false;
+        try
+        {
+            if (foreground != IntPtr.Zero && targetThread != thisThread)
+                attached = AttachThreadInput(thisThread, targetThread, true);
+
+            CoAllowSetForegroundWindow(manager, IntPtr.Zero);
+
+            var hr = manager.ActivateApplication(aumid, null, AO_NOERRORUI, out _);
+            if (hr < 0)
+                Marshal.ThrowExceptionForHR(hr); // caller falls back to the generic launch path
+        }
+        finally
+        {
+            if (attached)
+                AttachThreadInput(thisThread, targetThread, false);
+            Marshal.ReleaseComObject(manager);
+        }
     }
 
     private static string? FindStartMenuShortcut(string appName)

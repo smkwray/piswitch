@@ -68,6 +68,7 @@ public class ConfigService
         ["Telegram"]            = (NamedColors["blue"], "Telegram"),
         ["SyncTrayzor"]         = (NamedColors["teal"], "Syncthing"),
         ["Antigravity"]         = (NamedColors["purple"], "Antigravity"),
+        ["T3 Code"]             = (NamedColors["purple"], "T3 Code"),
 
         // macOS apps (kept for shared config compatibility)
         ["iTerm"]               = (NamedColors["green"], "iTerm"),

@@ -8,6 +8,10 @@ run/
 windows/PiSwitch/bin/
 windows/PiSwitch/obj/
 
+# Device-local worktrees and Syncthing conflict/temp copies
+.worktrees/
+~syncthing~*
+
 # Stale scripts directory (superseded by scripts/*-windows.ps1)
 scripts-windows/
 

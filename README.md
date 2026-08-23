@@ -106,6 +106,15 @@ This will:
 4. Set the `PISWITCH_HOME` environment variable pointing to the repo
 5. Start PiSwitch in the background
 
+The Windows initializer also migrates an existing default menu so `T3 Code` is
+slot 1 and removes the old `Antigravity` slot. Setup writes
+`%LOCALAPPDATA%\PiSwitch\piswitch-home.txt` and refreshes a local fallback copy
+of the configs. When the configured checkout exists, the installed daemon and
+AutoHotkey resolve that same project home. When it is temporarily unavailable,
+the installed daemon uses the synchronized local config instead of creating an
+empty checkout tree. Startup launches use `--start-only`, so two auto-start paths
+cannot pop the menu merely because one daemon already won the mutex.
+
 After setup, PiSwitch runs as a background daemon with a system tray icon.
 
 ### Hotkey setup with AutoHotkey
@@ -135,6 +144,20 @@ AutoHotkey v2 syntax:
         DllCall("CloseHandle", "Ptr", hEvent)
     }
 }
+```
+
+The existing personal AutoHotkey v1 controller can keep its other device
+shortcuts in its sync folder. Its PiSwitch trigger should resolve
+`PISWITCH_HOME` (falling back to `piswitch-home.txt`) and then signal the named
+event; it does not need a Google Drive path or a second PiSwitch config. If that
+controller runs elevated and must cold-start PiSwitch, launch PiSwitch through
+Explorer (for example with `ShellRun`) and pass `--start-only`; a direct child
+launch would make PiSwitch and any newly started target app inherit elevation.
+
+Run the focused Windows checks with:
+
+```powershell
+.\scripts\test-windows.ps1
 ```
 
 The event name format is `Local\PiSwitch_show_<instance>` — replace `default` with your instance name for multiple menus.

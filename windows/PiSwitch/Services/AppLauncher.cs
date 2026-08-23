@@ -150,12 +150,14 @@ public static class AppLauncher
 
     private static bool TryActivateExisting(string appName)
     {
-        var processName = ResolveProcessName(appName);
-        if (processName == null) return false;
+        var processNames = ResolveProcessNames(appName);
+        if (processNames.Count == 0) return false;
 
         try
         {
-            var procs = Process.GetProcessesByName(processName);
+            var procs = processNames
+                .SelectMany(Process.GetProcessesByName)
+                .ToArray();
             if (procs.Length == 0) return false;
 
             // Process.MainWindowHandle is not reliable for multi-window apps. Electron can
@@ -236,9 +238,9 @@ public static class AppLauncher
     }
 
     /// <summary>
-    /// Maps an app name to the process name (without .exe) to search for.
+    /// Maps an app name to one or more process names (without .exe) to search for.
     /// </summary>
-    private static string? ResolveProcessName(string appName)
+    private static IReadOnlyList<string> ResolveProcessNames(string appName)
     {
         // If it ends with .exe, strip it
         var name = appName;
@@ -248,6 +250,22 @@ public static class AppLauncher
         // If it's an absolute path, use the filename
         if (Path.IsPathRooted(name))
             name = Path.GetFileNameWithoutExtension(name);
+
+        // T3 Code has stable, nightly, and other desktop builds whose executable
+        // names share the "T3 Code" prefix. Resolve the running family instead
+        // of tying activation to one build's exact process name.
+        if (name.Equals("T3 Code", StringComparison.OrdinalIgnoreCase))
+        {
+            return Process.GetProcesses()
+                .Select(process =>
+                {
+                    try { return process.ProcessName; }
+                    catch { return string.Empty; }
+                })
+                .Where(processName => processName.StartsWith("T3 Code", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
 
         // Known app-name to process-name mappings
         // (app display names that differ from their process names)
@@ -287,7 +305,7 @@ public static class AppLauncher
             _ => name // Use as-is
         };
 
-        return mapped;
+        return [mapped];
     }
 
     private static void LaunchNew(string appName, string appHome)
@@ -327,6 +345,19 @@ public static class AppLauncher
         {
             StartProcess(shortcut);
             return;
+        }
+
+        // Some T3 installations do not publish a Start Menu shortcut. Keep the
+        // same stable/nightly family behavior by checking the conventional
+        // per-user install roots before falling back to shell name resolution.
+        if (appName.Equals("T3 Code", StringComparison.OrdinalIgnoreCase))
+        {
+            var executable = FindT3CodeExecutable();
+            if (executable != null)
+            {
+                StartProcess(executable);
+                return;
+            }
         }
 
         // 5. Fallback: shell execute by name (handles "notepad", "calc", etc.)
@@ -402,17 +433,74 @@ public static class AppLauncher
             Environment.GetFolderPath(Environment.SpecialFolder.StartMenu)
         };
 
+        string? familyMatch = null;
+        var familyScore = int.MaxValue;
+
         foreach (var dir in searchDirs)
         {
             if (!Directory.Exists(dir)) continue;
             foreach (var lnk in Directory.GetFiles(dir, "*.lnk", SearchOption.AllDirectories))
             {
-                if (Path.GetFileNameWithoutExtension(lnk)
-                    .Equals(appName, StringComparison.OrdinalIgnoreCase))
+                var shortcutName = Path.GetFileNameWithoutExtension(lnk);
+                if (shortcutName.Equals(appName, StringComparison.OrdinalIgnoreCase))
                     return lnk;
+
+                if (appName.Equals("T3 Code", StringComparison.OrdinalIgnoreCase)
+                    && shortcutName.StartsWith("T3 Code ", StringComparison.OrdinalIgnoreCase)
+                    && ScoreT3CodeVariant(shortcutName) < familyScore)
+                {
+                    familyMatch = lnk;
+                    familyScore = ScoreT3CodeVariant(shortcutName);
+                }
             }
         }
 
-        return null;
+        return familyMatch;
+    }
+
+    private static int ScoreT3CodeVariant(string shortcutName)
+    {
+        return shortcutName.Contains("Nightly", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+    }
+
+    private static string? FindT3CodeExecutable()
+    {
+        var localPrograms = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
+        var roots = new List<string>();
+
+        if (Directory.Exists(localPrograms))
+        {
+            try
+            {
+                roots.AddRange(Directory.GetDirectories(localPrograms, "t3*", SearchOption.TopDirectoryOnly));
+            }
+            catch { }
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        foreach (var root in new[] { programFiles, programFilesX86 })
+        {
+            if (!string.IsNullOrWhiteSpace(root))
+            {
+                roots.Add(Path.Combine(root, "T3 Code"));
+                roots.Add(Path.Combine(root, "t3code"));
+            }
+        }
+
+        try
+        {
+            return roots
+                .Where(Directory.Exists)
+                .SelectMany(root => Directory.GetFiles(root, "T3 Code*.exe", SearchOption.TopDirectoryOnly))
+                .Where(path => !Path.GetFileName(path).StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => Path.GetFileName(path).Contains("Nightly", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                .FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

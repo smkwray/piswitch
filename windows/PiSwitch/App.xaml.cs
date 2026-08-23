@@ -26,6 +26,7 @@ public partial class App : Application
     private volatile bool _exiting;
     private string _instanceName = "default";
     private bool _triggerOnly;
+    private bool _startOnly;
 
     private List<AppConfig>? _cachedAppConfigs;
     private DateTime _configLastModified;
@@ -77,9 +78,17 @@ public partial class App : Application
             Logger.Bootstrap("main:try-acquire");
             if (!_instanceManager.TryAcquire())
             {
-                // Another instance holds the mutex — trigger it and exit
-                Logger.Bootstrap("main:trigger-existing");
-                _instanceManager.TriggerExisting();
+                // Interactive launches re-open the existing menu. Startup launches are
+                // idempotent: a second auto-start path must not pop the menu at logon.
+                if (_startOnly)
+                {
+                    Logger.Bootstrap("main:already-running");
+                }
+                else
+                {
+                    Logger.Bootstrap("main:trigger-existing");
+                    _instanceManager.TriggerExisting();
+                }
                 Shutdown();
                 return;
             }
@@ -153,6 +162,8 @@ public partial class App : Application
                 _instanceName = args[i + 1];
             else if (args[i] is "--trigger" or "-t")
                 _triggerOnly = true;
+            else if (args[i] == "--start-only")
+                _startOnly = true;
         }
     }
 
@@ -193,7 +204,9 @@ public partial class App : Application
 
     private string GetAppHome()
     {
-        // 1. Explicit env var (set by setup-windows.ps1)
+        // 1. Explicit env var (set by setup-windows.ps1), but only while it exists.
+        // Returning a missing path would bypass the installed fallback config and can
+        // recreate an empty project tree before the synced checkout is available.
         var envHome = Environment.GetEnvironmentVariable("PISWITCH_HOME");
         if (!string.IsNullOrWhiteSpace(envHome) && Directory.Exists(envHome))
             return envHome;
@@ -222,12 +235,13 @@ public partial class App : Application
                 if (!string.IsNullOrWhiteSpace(home) && Directory.Exists(home))
                     return home;
             }
-        }
 
-        // 4. PISWITCH_HOME set but path not yet available (e.g. Google Drive still mounting) —
-        //    still use it so the app can create the dirs and wait for configs to appear
-        if (!string.IsNullOrWhiteSpace(envHome))
-            return envHome;
+            // 4. The configured checkout is unavailable. setup-windows.ps1 keeps this
+            // local copy synchronized specifically for logon/startup races.
+            var localConfigDir = Path.Combine(exeDir, "config", "instances");
+            if (Directory.Exists(localConfigDir))
+                return exeDir;
+        }
 
         return Directory.GetCurrentDirectory();
     }

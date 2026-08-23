@@ -12,13 +12,36 @@ Write-Host "Initializing config..."
 & "$Root\scripts\init-config-windows.ps1"
 Write-Host ""
 
-# 2. Install to a stable local path (avoids cloud-sync filesystem issues)
+# 2. Stop old instances before replacing the executable. Windows keeps the
+# single-file host open while it is running, including tray-only instances.
+$running = Get-Process -Name PiSwitch -ErrorAction SilentlyContinue
+if ($running) {
+    $running | Stop-Process -Force
+    for ($i = 0; $i -lt 40; $i++) {
+        if (-not (Get-Process -Name PiSwitch -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+}
+if (Get-Process -Name PiSwitch -ErrorAction SilentlyContinue) {
+    throw "PiSwitch did not exit before installation"
+}
+
+# 3. Install to a stable local path (avoids cloud-sync filesystem issues)
 $InstallDir = "$env:LOCALAPPDATA\PiSwitch"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item $DistExe "$InstallDir\PiSwitch.exe" -Force
 Write-Host "Installed to $InstallDir\PiSwitch.exe"
 
-# 3. Create startup shortcut
+# Keep a local fallback copy in sync. Normal operation reads the repo through
+# piswitch-home.txt; this prevents a stale pre-migration config from bringing
+# Antigravity back if the repo is temporarily unavailable during logon.
+$InstallConfigDir = "$InstallDir\config\instances"
+New-Item -ItemType Directory -Path $InstallConfigDir -Force | Out-Null
+Get-ChildItem -LiteralPath "$Root\config\instances" -File -Filter '*.json' |
+    Copy-Item -Destination $InstallConfigDir -Force
+Write-Host "Synchronized fallback config to $InstallConfigDir"
+
+# 4. Create startup shortcut
 Write-Host "Setting up auto-start..."
 $startupDir = [Environment]::GetFolderPath('Startup')
 $ws = New-Object -ComObject WScript.Shell
@@ -28,7 +51,7 @@ $shortcut.WorkingDirectory = $InstallDir
 $shortcut.WindowStyle = 7
 $shortcut.Description = "PiSwitch pie menu daemon"
 # Set PISWITCH_HOME so the exe finds config in the repo
-$shortcut.Arguments = ""
+$shortcut.Arguments = "--start-only"
 $shortcut.Save()
 Write-Host "Created startup shortcut: $startupDir\PiSwitch.lnk"
 
@@ -36,21 +59,15 @@ Write-Host "Created startup shortcut: $startupDir\PiSwitch.lnk"
 Set-Content "$InstallDir\piswitch-home.txt" $Root
 Write-Host ""
 
-# 4. Set PISWITCH_HOME as a user environment variable (persists across reboots)
+# 5. Set PISWITCH_HOME as a user environment variable (persists across reboots)
 [Environment]::SetEnvironmentVariable("PISWITCH_HOME", $Root, "User")
 Write-Host "Set PISWITCH_HOME=$Root (user environment variable)"
 Write-Host ""
 
-# 5. Start the daemon now
+# 6. Start the daemon now
 Write-Host "Starting PiSwitch..."
-$running = Get-Process -Name PiSwitch -ErrorAction SilentlyContinue
-if ($running) {
-    $running | Stop-Process -Force
-    Start-Sleep -Seconds 2
-}
-
 $env:PISWITCH_HOME = $Root
-Start-Process -FilePath "$InstallDir\PiSwitch.exe" -WindowStyle Hidden
+Start-Process -FilePath "$InstallDir\PiSwitch.exe" -ArgumentList "--start-only" -WindowStyle Hidden
 Start-Sleep -Seconds 3
 $proc = Get-Process -Name PiSwitch -ErrorAction SilentlyContinue
 if ($proc) {

@@ -1,16 +1,13 @@
 {
-  "apps": ["Chrome", "Visual Studio Code", "Windows Terminal", "Slack", "Spotify"],
+  "apps": ["T3 Code", "Codex", "Claude", "rcsync", "SyncTrayzor"],
   "colors": {
-    "Chrome": "#FFCC00",
-    "Visual Studio Code": "systemBlue",
-    "Windows Terminal": "#2D2D2D",
-    "Slack": "#7C3AED",
-    "Spotify": "#1DB954"
+    "T3 Code": "purple"
   },
   "labels": {
-    "Visual Studio Code": "VS Code",
-    "Windows Terminal": "Terminal"
-  },
-  "paths": {
+    "T3 Code": "T3 Code",
+    "Codex": "Codex",
+    "Claude": "Claude",
+    "rcsync": "rcsync",
+    "SyncTrayzor": "SyncTrayzor"
   }
 }

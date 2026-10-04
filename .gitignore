@@ -25,3 +25,11 @@ assets/finder-groups/
 # Keep only the public README in version control
 *.md
 !/README.md
+
+# Local backups and editor scratch
+*.bak
+*.bak-*
+*.orig.bak
+config/instances/*.bak*
+.private-denylist
+.*-private-denylist

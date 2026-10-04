@@ -10,13 +10,17 @@ LOG_FILE="$RUN_DIR/launcher.log"
 mkdir -p "$RUN_DIR"
 
 export PISWITCH_HOME="$ROOT"
+DEBUG_LOGS="${PISWITCH_DEBUG_LOGS:-}"
 
 if [ ! -x "$BIN" ]; then
     log_line() { :; }
     exit 1
 fi
 
-if command -v shasum >/dev/null 2>&1; then
+HASH_FILE="$ROOT/dist/bin/.piswitch-hash"
+if [ -f "$HASH_FILE" ]; then
+    HASH="$(cat "$HASH_FILE")"
+elif command -v shasum >/dev/null 2>&1; then
     HASH="$(shasum -a 256 "$BIN" | awk '{print substr($1,1,10)}')"
 else
     HASH="$(date +%s)"
@@ -25,9 +29,13 @@ NAMESPACE="piswitch-$HASH"
 
 export PISWITCH_NAMESPACE="$NAMESPACE"
 
-log_line() {
-    printf '%s pid=%s instance=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$INSTANCE" "$1" >> "$LOG_FILE"
-}
+if [ "$DEBUG_LOGS" = "1" ] || [ "$DEBUG_LOGS" = "true" ] || [ "$DEBUG_LOGS" = "yes" ] || [ "$DEBUG_LOGS" = "on" ]; then
+    log_line() {
+        printf '%s pid=%s instance=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$INSTANCE" "$1" >> "$LOG_FILE"
+    }
+else
+    log_line() { :; }
+fi
 
 if [ "$INSTANCE" = "default" ]; then
     PID_FILE="$RUN_DIR/$NAMESPACE.pid"
@@ -39,39 +47,15 @@ fi
 
 is_expected_instance_pid() {
     local pid="$1"
-    local cmd
-
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-
-    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-    [ -n "$cmd" ] || return 1
-
-    case "$cmd" in
-        *"$BIN"*)
-            if [ "$INSTANCE" = "default" ]; then
-                case "$cmd" in
-                    *"--instance "*) return 1 ;;
-                    *) return 0 ;;
-                esac
-            else
-                case "$cmd" in
-                    *"--instance $INSTANCE"*) return 0 ;;
-                    *) return 1 ;;
-                esac
-            fi
-            ;;
-        *)
-            return 1
-            ;;
-    esac
 }
 
 if [ -f "$PID_FILE" ]; then
     PID="$(tr -d '[:space:]' < "$PID_FILE" || true)"
     if is_expected_instance_pid "$PID"; then
         log_line "trigger pid=$PID file=$TRIGGER_FILE"
-        /usr/bin/touch "$TRIGGER_FILE"
+        printf '%s\n' "$$" > "$TRIGGER_FILE"
         exit 0
     fi
     log_line "stale-pid pid=$PID file=$PID_FILE"

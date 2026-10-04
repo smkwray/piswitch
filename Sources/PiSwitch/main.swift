@@ -17,6 +17,22 @@ func namespacePrefix() -> String {
     return trimmed
 }
 
+func envFlag(_ name: String) -> Bool {
+    guard let raw = ProcessInfo.processInfo.environment[name] else { return false }
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "1", "true", "yes", "on":
+        return true
+    default:
+        return false
+    }
+}
+
+let debugLoggingEnabled = envFlag("PISWITCH_DEBUG_LOGS")
+let windowReuseEnabled = !envFlag("PISWITCH_DISABLE_WINDOW_REUSE")
+let triggerDebounceEnabled = !envFlag("PISWITCH_DISABLE_TRIGGER_DEBOUNCE")
+let triggerDebounceInterval: CFTimeInterval = 0.08
+let preventIdleSleep = envFlag("PISWITCH_PREVENT_IDLE_SLEEP")
+
 // Default app configurations (name -> color, displayName)
 let defaultAppConfigs: [String: (color: NSColor, displayName: String)] = [
     "Codex": (.systemBlue, "Codex"),
@@ -54,6 +70,33 @@ let defaultAppConfigs: [String: (color: NSColor, displayName: String)] = [
 let defaultApps = ["Safari", "Visual Studio Code", "Terminal", "Messages", "Mail"]
 var instanceColorOverrides: [String: NSColor] = [:]
 var instanceLabelOverrides: [String: String] = [:]
+
+// Config cache: avoid re-reading JSON on every trigger
+var cachedAppNames: [String]?
+var cachedConfigMtime: Date?
+var hasCachedAppNames = false
+
+func configFileMtime() -> Date? {
+    let paths = getConfigPaths()
+    for path in paths {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let mtime = attrs[.modificationDate] as? Date {
+            return mtime
+        }
+    }
+    return nil
+}
+
+func loadConfigCached(currentMtime mtime: Date? = configFileMtime()) -> [String] {
+    if hasCachedAppNames, let cached = cachedAppNames, mtime == cachedConfigMtime {
+        return cached
+    }
+    let result = loadConfig()
+    cachedAppNames = result
+    cachedConfigMtime = mtime
+    hasCachedAppNames = true
+    return result
+}
 
 func canonicalAppName(_ appName: String) -> String {
     if appName.contains("/") {
@@ -176,6 +219,7 @@ func ensureDirectoryExists(_ path: String) {
 }
 
 func bootstrapLog(_ message: String) {
+    guard debugLoggingEnabled else { return }
     let runDir = appRunDir()
     ensureDirectoryExists(runDir)
     let path = "\(runDir)/piswitch-bootstrap.log"
@@ -194,6 +238,7 @@ func bootstrapLog(_ message: String) {
 }
 
 func logEvent(_ message: String) {
+    guard debugLoggingEnabled else { return }
     let runDir = appRunDir()
     ensureDirectoryExists(runDir)
     let path = "\(runDir)/piswitch-events.log"
@@ -210,6 +255,14 @@ func logEvent(_ message: String) {
         }
     }
 }
+
+let applicationSearchRoots = [
+    "/Applications",
+    "/Applications/Utilities",
+    "/System/Applications",
+    "/System/Applications/Utilities",
+    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications").path,
+]
 
 func resolveAppPath(_ appName: String) -> String? {
     if appName.hasPrefix("/") && FileManager.default.fileExists(atPath: appName) {
@@ -237,6 +290,32 @@ func resolveAppPath(_ appName: String) -> String? {
             .appendingPathComponent("\(normalizedGroup).app").path
         if FileManager.default.fileExists(atPath: legacyGroupPath) {
             return legacyGroupPath
+        }
+    }
+
+    // Installed bundle whose filename differs from the configured name, e.g. a
+    // config entry of "Telegram" against a "Telegram Desktop.app" install.
+    // `open -a` matches the bundle filename only, so resolve to a path instead.
+    let baseName = canonicalAppName(appName)
+    if !baseName.isEmpty {
+        var prefixMatch: String?
+        for root in applicationSearchRoots {
+            let rootURL = URL(fileURLWithPath: root)
+            let exactPath = rootURL.appendingPathComponent("\(baseName).app").path
+            if FileManager.default.fileExists(atPath: exactPath) {
+                return exactPath
+            }
+            if prefixMatch == nil,
+               let entries = try? FileManager.default.contentsOfDirectory(atPath: root),
+               let match = entries.sorted().first(where: {
+                   $0.hasSuffix(".app") && $0.hasPrefix("\(baseName) ")
+               }) {
+                prefixMatch = rootURL.appendingPathComponent(match).path
+            }
+        }
+        // Only after every root has been checked, so an exact match always wins.
+        if let prefixMatch = prefixMatch {
+            return prefixMatch
         }
     }
 
@@ -309,6 +388,26 @@ struct AppConfig {
     let color: NSColor
     let startAngle: Double
     let endAngle: Double
+}
+
+var cachedAppConfigs: [AppConfig]?
+var cachedAppConfigsMtime: Date?
+var hasCachedAppConfigs = false
+var cachedAppConfigsVersion = 0
+
+func loadAppConfigsCached() -> [AppConfig] {
+    let mtime = configFileMtime()
+    if hasCachedAppConfigs, let cached = cachedAppConfigs, mtime == cachedAppConfigsMtime {
+        return cached
+    }
+
+    let appNames = loadConfigCached(currentMtime: mtime)
+    let result = createAppConfigs(appNames: appNames)
+    cachedAppConfigs = result
+    cachedAppConfigsMtime = mtime
+    hasCachedAppConfigs = true
+    cachedAppConfigsVersion += 1
+    return result
 }
 
 func calculateSliceAngles(count: Int) -> [(start: Double, end: Double)] {
@@ -760,11 +859,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var instance: AppDelegate?
     var window: PieMenuWindow?
     var appConfigs: [AppConfig] = []
+    var windowAppConfigsVersion: Int?
     var triggerSource: DispatchSourceFileSystemObject?
     var triggerFD: Int32 = -1
     var globalClickMonitor: Any?
     var isTransitioning = false
     var processActivity: NSObjectProtocol?
+    var lastTriggerAt: CFAbsoluteTime = 0
 
     override init() {
         super.init()
@@ -777,11 +878,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ensureDirectoryExists(appConfigDir())
         logEvent("did-finish-launching")
 
-        // Prevent macOS from killing/napping the idle daemon
+        // Prevent macOS from killing/napping the idle daemon.
+        // Default to allowing idle sleep so the Mac can sleep when locked;
+        // set PISWITCH_PREVENT_IDLE_SLEEP=1 to revert to legacy system-sleep blocking.
         ProcessInfo.processInfo.disableSuddenTermination()
         ProcessInfo.processInfo.disableAutomaticTermination("piswitch daemon")
+        let activityOptions: ProcessInfo.ActivityOptions = preventIdleSleep
+            ? .userInitiated
+            : .userInitiatedAllowingIdleSystemSleep
         processActivity = ProcessInfo.processInfo.beginActivity(
-            options: .userInitiated,
+            options: activityOptions,
             reason: "PiSwitch daemon waiting for activation"
         )
 
@@ -803,12 +909,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
-            eventMask: [.attrib, .write],
+            eventMask: [.write],
             queue: .main
         )
         source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            if triggerDebounceEnabled && now - self.lastTriggerAt < triggerDebounceInterval {
+                logEvent("watch-fired:ignored-duplicate")
+                return
+            }
+            self.lastTriggerAt = now
             logEvent("watch-fired")
-            self?.showMenu()
+            self.showMenu()
         }
         source.setCancelHandler {
             close(fd)
@@ -817,29 +930,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         triggerSource = source
     }
 
-    func showMenu() {
-        isTransitioning = true
+    func positionWindow(_ window: NSWindow, at mouseLoc: NSPoint) {
+        let size = window.frame.size
+        let newOrigin = NSPoint(x: mouseLoc.x - size.width / 2,
+                                y: mouseLoc.y - size.height / 2)
+        window.setFrameOrigin(newOrigin)
+    }
 
-        hideMenu()
-
-        let appNames = loadConfig()
-        appConfigs = createAppConfigs(appNames: appNames)
-        logEvent("show-menu apps=\(appConfigs.count)")
-
-        let mouseLoc = NSEvent.mouseLocation
-        window = PieMenuWindow(mouseLocation: mouseLoc, apps: appConfigs)
-
-        window?.onSelect = { [weak self] index in
-            self?.launchApp(index)
+    func installGlobalClickMonitor() {
+        if let monitor = globalClickMonitor {
+            NSEvent.removeMonitor(monitor)
         }
-        window?.onCancel = { [weak self] in
-            self?.hideMenu()
-        }
-
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        logEvent("menu-visible")
-
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self, let window = self.window else { return }
             let mouseLoc = NSEvent.mouseLocation
@@ -847,6 +948,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.hideMenu()
             }
         }
+    }
+
+    func discardWindow() {
+        window?.close()
+        window = nil
+        windowAppConfigsVersion = nil
+    }
+
+    func showMenu() {
+        // If menu is already showing, just reposition to current mouse
+        if let existingWindow = window, existingWindow.isVisible {
+            let mouseLoc = NSEvent.mouseLocation
+            positionWindow(existingWindow, at: mouseLoc)
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if let view = existingWindow.contentView as? PieMenuView {
+                view.highlight(nil)
+            }
+            logEvent("show-menu:reposition")
+            return
+        }
+
+        isTransitioning = true
+
+        appConfigs = loadAppConfigsCached()
+        logEvent("show-menu apps=\(appConfigs.count)")
+
+        let mouseLoc = NSEvent.mouseLocation
+        if !windowReuseEnabled || window == nil || windowAppConfigsVersion != cachedAppConfigsVersion {
+            discardWindow()
+            window = PieMenuWindow(mouseLocation: mouseLoc, apps: appConfigs)
+            windowAppConfigsVersion = cachedAppConfigsVersion
+
+            window?.onSelect = { [weak self] index in
+                self?.launchApp(index)
+            }
+            window?.onCancel = { [weak self] in
+                self?.hideMenu()
+            }
+        } else if let existingWindow = window {
+            positionWindow(existingWindow, at: mouseLoc)
+            if let view = existingWindow.contentView as? PieMenuView {
+                view.highlight(nil)
+            }
+        }
+
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        logEvent("menu-visible")
+
+        installGlobalClickMonitor()
 
         isTransitioning = false
     }
@@ -856,8 +1008,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
         }
-        window?.close()
-        window = nil
+        if windowReuseEnabled {
+            window?.orderOut(nil)
+        } else {
+            discardWindow()
+        }
         logEvent("menu-hidden")
     }
 
@@ -883,8 +1038,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let monitor = globalClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalClickMonitor = nil
+        }
         triggerSource?.cancel()
         triggerSource = nil
+        discardWindow()
         cleanupPIDFile()
         try? FileManager.default.removeItem(atPath: getTriggerPath())
     }

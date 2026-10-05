@@ -862,6 +862,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var windowAppConfigsVersion: Int?
     var triggerSource: DispatchSourceFileSystemObject?
     var triggerFD: Int32 = -1
+    var signalSource: DispatchSourceSignal?
+    var wakeObservers: [NSObjectProtocol] = []
     var globalClickMonitor: Any?
     var isTransitioning = false
     var processActivity: NSObjectProtocol?
@@ -893,6 +895,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         writePIDFile()
         setupTriggerWatch()
+        setupSignalWatch()
+        setupWakeNotifications()
 
         // Show menu immediately on first launch
         showMenu()
@@ -928,6 +932,71 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         source.resume()
         triggerSource = source
+    }
+
+    func setupSignalWatch() {
+        signal(SIGUSR1, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            if triggerDebounceEnabled && now - self.lastTriggerAt < triggerDebounceInterval {
+                logEvent("signal-fired:ignored-duplicate")
+                return
+            }
+            self.lastTriggerAt = now
+            logEvent("signal-fired")
+            self.showMenu()
+        }
+        source.resume()
+        signalSource = source
+    }
+
+    func setupWakeNotifications() {
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        let wakeObserver = wsCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                logEvent("workspace-did-wake")
+                self?.rearmTriggerWatch()
+            }
+        }
+        let screensWakeObserver = wsCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                logEvent("workspace-screens-did-wake")
+                self?.rearmTriggerWatch()
+            }
+        }
+        let screenParamsObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                logEvent("screen-parameters-changed")
+                self?.discardWindow()
+            }
+        }
+        wakeObservers = [wakeObserver, screensWakeObserver, screenParamsObserver]
+    }
+
+    func rearmTriggerWatch() {
+        logEvent("rearm-trigger-watch")
+        discardWindow()
+        triggerSource?.cancel()
+        triggerSource = nil
+        if triggerFD >= 0 {
+            close(triggerFD)
+            triggerFD = -1
+        }
+        setupTriggerWatch()
     }
 
     func positionWindow(_ window: NSWindow, at mouseLoc: NSPoint) {
@@ -1042,8 +1111,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
         }
+        for observer in wakeObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        wakeObservers.removeAll()
+        signalSource?.cancel()
+        signalSource = nil
         triggerSource?.cancel()
         triggerSource = nil
+        if triggerFD >= 0 {
+            close(triggerFD)
+            triggerFD = -1
+        }
         discardWindow()
         cleanupPIDFile()
         try? FileManager.default.removeItem(atPath: getTriggerPath())

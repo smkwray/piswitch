@@ -56,6 +56,7 @@ if [ -f "$PID_FILE" ]; then
     if is_expected_instance_pid "$PID"; then
         log_line "trigger pid=$PID file=$TRIGGER_FILE"
         printf '%s\n' "$$" > "$TRIGGER_FILE"
+        kill -USR1 "$PID" 2>/dev/null || true
         exit 0
     fi
     log_line "stale-pid pid=$PID file=$PID_FILE"

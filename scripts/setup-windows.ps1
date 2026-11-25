@@ -33,8 +33,7 @@ Copy-Item $DistExe "$InstallDir\PiSwitch.exe" -Force
 Write-Host "Installed to $InstallDir\PiSwitch.exe"
 
 # Keep a local fallback copy in sync. Normal operation reads the repo through
-# piswitch-home.txt; this prevents a stale pre-migration config from bringing
-# Antigravity back if the repo is temporarily unavailable during logon.
+# piswitch-home.txt; the copy is used only if the repo is unavailable at logon.
 $InstallConfigDir = "$InstallDir\config\instances"
 New-Item -ItemType Directory -Path $InstallConfigDir -Force | Out-Null
 Get-ChildItem -LiteralPath "$Root\config\instances" -File -Filter '*.json' |

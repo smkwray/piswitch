@@ -1,13 +1,13 @@
 {
-  "apps": ["T3 Code", "Codex", "Claude", "rcsync", "SyncTrayzor"],
-  "colors": {
-    "T3 Code": "purple"
-  },
+  "apps": [
+    "Microsoft Edge",
+    "Visual Studio Code",
+    "Slack",
+    "Spotify",
+    "Discord"
+  ],
   "labels": {
-    "T3 Code": "T3 Code",
-    "Codex": "Codex",
-    "Claude": "Claude",
-    "rcsync": "rcsync",
-    "SyncTrayzor": "SyncTrayzor"
+    "Microsoft Edge": "Edge",
+    "Visual Studio Code": "VS Code"
   }
 }

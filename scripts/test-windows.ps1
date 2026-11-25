@@ -7,8 +7,7 @@ function Assert-True($Condition, $Message) {
 
 $examplePath = Join-Path $Root "config\examples\default-windows.json"
 $example = Get-Content -LiteralPath $examplePath -Raw | ConvertFrom-Json
-Assert-True (@($example.apps)[0] -eq "T3 Code") "default Windows config must put T3 Code in slot 1"
-Assert-True (-not (@($example.apps) -contains "Antigravity")) "default Windows config must not retain Antigravity"
+Assert-True (@($example.apps).Count -ge 1 -and @($example.apps).Count -le 8) "default Windows config must fit the 8-slot menu"
 
 $launcher = Get-Content -LiteralPath (Join-Path $Root "windows\PiSwitch\Services\AppLauncher.cs") -Raw
 Assert-True ($launcher.Contains('StartsWith("T3 Code", StringComparison.OrdinalIgnoreCase)')) "launcher must match the T3 Code process family"
@@ -25,7 +24,7 @@ Assert-True ($setup.Contains("piswitch-home.txt")) "setup must persist the proje
 Assert-True ($setup.Contains("Synchronized fallback config")) "setup must refresh the local fallback config"
 Assert-True ($setup.Contains('$shortcut.Arguments = "--start-only"')) "startup shortcut must not re-open an existing menu"
 
-# Exercise the real config migration against an isolated old-style config.
+# Setup runs on every reinstall, so it must never rewrite a menu the user already has.
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("piswitch-config-test-" + [IO.Path]::GetRandomFileName())
 try {
     New-Item -ItemType Directory -Path "$tempRoot\scripts", "$tempRoot\config\examples", "$tempRoot\config\instances" -Force | Out-Null
@@ -35,15 +34,15 @@ try {
     Copy-Item (Join-Path $Root "config\examples\explorer-groups.json") "$tempRoot\config\examples\explorer-groups.json"
     Set-Content -LiteralPath "$tempRoot\config\instances\default.json" -Value @'
 {
-  "apps": ["Antigravity", "ChatGPT", "Claude"],
+  "apps": ["Notepad", "ChatGPT", "Claude"],
   "paths": {}
 }
 '@
 
     & "$tempRoot\scripts\init-config-windows.ps1" | Out-Null
-    $migrated = Get-Content -LiteralPath "$tempRoot\config\instances\default.json" -Raw | ConvertFrom-Json
-    Assert-True (@($migrated.apps)[0] -eq "T3 Code") "existing config migration must move T3 Code to slot 1"
-    Assert-True (-not (@($migrated.apps) -contains "Antigravity")) "existing config migration must remove Antigravity"
+    $kept = Get-Content -LiteralPath "$tempRoot\config\instances\default.json" -Raw | ConvertFrom-Json
+    Assert-True ((@($kept.apps) -join "|") -eq "Notepad|ChatGPT|Claude") "setup must keep an existing menu's apps and order"
+    Assert-True (Test-Path -LiteralPath "$tempRoot\config\instances\messaging.json") "setup must still create missing instances"
 } finally {
     if (Test-Path -LiteralPath $tempRoot) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
@@ -62,7 +61,7 @@ try {
     Copy-Item (Join-Path $Root "config\examples\explorer-groups.json") "$legacyRoot\config\examples\explorer-groups.json"
     Set-Content -LiteralPath "$legacyRoot\config\instances\config.json" -Value @'
 {
-  "apps": ["Antigravity", "ChatGPT", "Claude"],
+  "apps": ["Notepad", "ChatGPT", "Claude"],
   "labels": {"ChatGPT": "My Chat"}
 }
 '@
@@ -70,8 +69,7 @@ try {
     & "$legacyRoot\scripts\init-config-windows.ps1" | Out-Null
     Assert-True (Test-Path -LiteralPath "$legacyRoot\config\instances\default.json") "legacy config.json must be promoted to default.json"
     $legacyMigrated = Get-Content -LiteralPath "$legacyRoot\config\instances\default.json" -Raw | ConvertFrom-Json
-    Assert-True (@($legacyMigrated.apps)[0] -eq "T3 Code") "legacy config migration must put T3 Code in slot 1"
-    Assert-True (-not (@($legacyMigrated.apps) -contains "Antigravity")) "legacy config migration must remove Antigravity"
+    Assert-True ((@($legacyMigrated.apps) -join "|") -eq "Notepad|ChatGPT|Claude") "legacy promotion must keep the user's apps and order"
     Assert-True ($legacyMigrated.labels.ChatGPT -eq "My Chat") "legacy config migration must preserve custom fields"
 } finally {
     if (Test-Path -LiteralPath $legacyRoot) {
